@@ -18,12 +18,12 @@ int main()
 
     // Create IK
     iDynTree::InverseKinematics ik;
-    ik.setVerbosity(0);
+    ik.setVerbosity(1);
     ik.setLinearSolverName("ma27");
 
     bool ok = ik.setModel(chain);
 
-    std::cout << "Random serial chain created is " << chain.toString();
+    //std::cout << "Random serial chain created is " << chain.toString();
 
     // Name of the targetFrame
     std::string targetFrame = "link9";
@@ -45,8 +45,13 @@ int main()
     ASSERT_IS_TRUE(ok);
 
     // Create a random vector of internal joint positions
-    iDynTree::JointPosDoubleArray sInitial(ik.fullModel());
-    std::cout << "sInitial " << sInitial.toString();
+    iDynTree::JointPosDoubleArray sRandom;
+    getRandomJointPositions(sRandom, kinDynDes.model());
+    std::cout << "Random initial joint positions : " << sRandom.toString();
+
+    // Set it to the KinDyn object to get reasonable values for constraints and targets
+    ok = kinDynDes.setJointPos(sRandom);
+    ASSERT_IS_TRUE(ok);
 
     // Add fixed base frame as constraint
     iDynTree::Transform baseTransform = iDynTree::Transform::Identity();
@@ -54,10 +59,11 @@ int main()
     ASSERT_IS_TRUE(ok);
 
     // Add target
-    ok = ik.addTarget(targetFrame, iDynTree::Transform::Identity());
+    ok = ik.addTarget(targetFrame, kinDynDes.getWorldTransform(targetFrame));
     ASSERT_IS_TRUE(ok);
 
-
+    // Set zero initial guess for joints
+    iDynTree::JointPosDoubleArray sInitial(ik.fullModel());
     ik.setFullJointsInitialCondition(&(baseTransform), &(sInitial));
 
     ok = ik.solve();
@@ -68,7 +74,32 @@ int main()
     iDynTree::JointPosDoubleArray sOpt(ik.fullModel());
     ik.getFullJointsSolution(baseOpt, sOpt);
 
-    std::cout << "Joint solution is " << sOpt.toString() << std::endl;
+    std::cout << "Optimized initial joint positions : " << sOpt.toString() << std::endl;
+
+    // Dummy variables
+    iDynTree::Twist dummyVel;
+    dummyVel.zero();
+    iDynTree::Vector3 dummyGrav;
+    dummyGrav.zero();
+    iDynTree::JointDOFsDoubleArray dummyJointVel(ik.fullModel());
+    dummyJointVel.zero();
+
+    // Create a new KinDyn object with optimization solutions
+    iDynTree::KinDynComputations kinDynOpt;
+    ok = kinDynOpt.loadRobotModel(ik.fullModel());
+    ASSERT_IS_TRUE(ok);
+
+    kinDynOpt.setRobotState(baseOpt, sOpt, dummyVel, dummyJointVel, dummyGrav);
+
+    double tolConstraints = 1e-6;
+    double tolTargets     = 1e-3;
+
+    // Check if the base link constraint is still valid
+    ASSERT_EQUAL_TRANSFORM_TOL(kinDynOpt.getWorldTransform("baseLink"), kinDynDes.getWorldTransform("baseLink"), tolConstraints);
+
+    // Check if the target is realized
+    ASSERT_EQUAL_VECTOR_TOL(kinDynDes.getWorldTransform(targetFrame).getPosition(), kinDynOpt.getWorldTransform(targetFrame).getPosition(), tolTargets);
+    ASSERT_EQUAL_MATRIX_TOL(kinDynDes.getWorldTransform(targetFrame).getRotation(), kinDynOpt.getWorldTransform(targetFrame).getRotation(), tolTargets);
 
     return 0;
 }
